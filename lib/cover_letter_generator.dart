@@ -4,6 +4,10 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class CoverLetterGenerator extends StatefulWidget {
   final String apiKey;
@@ -27,6 +31,8 @@ class _CoverLetterGeneratorState extends State<CoverLetterGenerator> {
   bool _isLoading = false;
   bool _isStreaming = false;
   String _errorMessage = '';
+  bool _isSaving = false;
+  String _savedFilePath = '';
 
   // Google Gemini API streaming endpoint
   final String _geminiEndpoint =
@@ -182,6 +188,128 @@ class _CoverLetterGeneratorState extends State<CoverLetterGenerator> {
     }
   }
 
+  // Function to generate and save PDF
+  Future<void> _saveCoverLetterAsPdf() async {
+    if (_coverLetter.isEmpty) {
+      setState(() {
+        _errorMessage = 'No cover letter to save';
+      });
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _errorMessage = '';
+      _savedFilePath = '';
+    });
+
+    try {
+      // Check storage permission
+      var status = await Permission.storage.status;
+      if (!status.isGranted) {
+        // Request permission
+        status = await Permission.storage.request();
+        if (!status.isGranted) {
+          setState(() {
+            _errorMessage = 'Storage permission is required to save the PDF';
+            _isSaving = false;
+          });
+          return;
+        }
+      }
+
+      // Create PDF document
+      final pdf = pw.Document();
+
+      // Add page with formatted cover letter
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  'Cover Letter',
+                  style: pw.TextStyle(
+                    fontSize: 20,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 20),
+                pw.Text(
+                  DateTime.now().toString().split(' ')[0], // Current date
+                  style: const pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 30),
+                pw.Text(
+                  _coverLetter,
+                  style: const pw.TextStyle(
+                    fontSize: 12,
+                    lineSpacing: 1.5,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      // Get downloads directory path based on platform
+      Directory? directory;
+      if (Platform.isAndroid) {
+        // For Android
+        directory = Directory('/storage/emulated/0/Download');
+        // Ensure directory exists
+        if (!await directory.exists()) {
+          directory = await getExternalStorageDirectory();
+        }
+      } else if (Platform.isIOS) {
+        // For iOS
+        directory = await getApplicationDocumentsDirectory();
+      } else {
+        // For other platforms
+        directory = await getDownloadsDirectory();
+      }
+
+      if (directory == null) {
+        throw Exception('Could not access downloads directory');
+      }
+
+      // Create filename with timestamp to avoid duplicates
+      final String fileName =
+          'Cover_Letter_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      final String filePath = '${directory.path}/$fileName';
+
+      // Save the PDF file
+      final File file = File(filePath);
+      await file.writeAsBytes(await pdf.save());
+
+      setState(() {
+        _isSaving = false;
+        _savedFilePath = filePath;
+      });
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('PDF saved to: $filePath'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'OK',
+            onPressed: () {},
+          ),
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Error saving PDF: $e';
+        _isSaving = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -256,6 +384,13 @@ class _CoverLetterGeneratorState extends State<CoverLetterGenerator> {
                 style: const TextStyle(color: Colors.red),
               ),
             ],
+            if (_savedFilePath.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'PDF saved to: $_savedFilePath',
+                style: const TextStyle(color: Colors.green),
+              ),
+            ],
             if (_coverLetter.isNotEmpty || _isStreaming) ...[
               const SizedBox(height: 24),
               Row(
@@ -323,11 +458,16 @@ class _CoverLetterGeneratorState extends State<CoverLetterGenerator> {
                           ),
                           const SizedBox(width: 8),
                           ElevatedButton.icon(
-                            onPressed: () {
-                              // Save as file implementation
-                            },
-                            icon: const Icon(Icons.download),
-                            label: const Text('Save'),
+                            onPressed: _isSaving ? null : _saveCoverLetterAsPdf,
+                            icon: _isSaving
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.download),
+                            label: const Text('Download PDF'),
                           ),
                         ],
                       ),
